@@ -66,8 +66,11 @@ defmodule CodeStory do
       invoice = CodeStory.tell(fn -> process_order(params) end)
 
   This is the recommended form when surveying unfamiliar code: you know the *entry*
-  even when you don't know where the flow *ends*. It captures only the first
-  top-level call, so wrap a single entry call. It **never breaks the wrapped
+  even when you don't know where the flow *ends*. A single entry call is still the
+  clearest thing to wrap, but `fun` may hold several: every top-level call becomes
+  a root of the trace, in call order. That matters when the entry point is
+  framework code the tracer does not follow -- your own functions are then reached
+  as a sequence, not as one call. It **never breaks the wrapped
   code** — if a trace is already active, tracing fails to start, or the trace can't
   be displayed, `fun` still runs and its result is still returned (with a warning).
   Unlike `narrate/2` (which raises on an active trace), the block form warns and
@@ -157,9 +160,10 @@ defmodule CodeStory do
 
   Notes:
 
-    * Traces the calling process and captures only the **first** top-level call, so
-      the clean pattern is one entry call: `narrate(fn -> entry(...) end)`. A `fun`
-      with no traced calls returns `{result, []}`.
+    * Traces the calling process. Every top-level call inside `fun` becomes a root
+      of the returned tree, in call order, so `fun` may bracket a region rather
+      than wrap a single entry call. A `fun` with no traced calls returns
+      `{result, []}`. ⚠ Calls made by processes that `fun` spawns are not traced.
     * `opts` are trace-time only — currently `:auto_boundary` (default `true`, as in
       `tell/1`). Pass `auto_boundary: false` to include an Ecto repo's internals in
       the raw tree.
@@ -182,7 +186,7 @@ defmodule CodeStory do
 
         try do
           result = fun.()
-          {result, fetch_tree(collector_pid)}
+          {result, collect(collector_pid)}
         after
           CodeStory.Tracer.stop_tracing()
           Process.delete(@collector_key)
@@ -263,7 +267,7 @@ defmodule CodeStory do
             # collector, output_result can raise (File.write! / formatter). Neither
             # may clobber a successful fun, so both are guarded (rescue AND catch).
             try do
-              collector_pid |> fetch_tree() |> output_result(opts)
+              collector_pid |> collect() |> output_result(opts)
             rescue
               e ->
                 IO.warn(
@@ -425,6 +429,24 @@ defmodule CodeStory do
   # the `fun` made no traced calls and we return `[]`.
   @saw_call_grace_ms 50
   @completion_ceiling_ms 5_000
+
+  # Stop tracing first, then ask for the tree. The order is the barrier: trace
+  # messages for this process are delivered in order relative to our own
+  # `GenServer.call`, so once no further events can be generated, everything
+  # generated is already in the collector's mailbox ahead of the call.
+  #
+  # ⚠ That guarantee covers the traced process only. It does not extend to
+  # processes it spawned, which is why following spawned processes needs a
+  # different barrier than this one.
+  defp collect(pid) do
+    CodeStory.Tracer.stop_tracing()
+
+    try do
+      GenServer.call(pid, :finish)
+    catch
+      :exit, {:noproc, _} -> []
+    end
+  end
 
   defp fetch_tree(pid), do: fetch_tree(pid, 0)
 

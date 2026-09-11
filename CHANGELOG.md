@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A traced region now records **every** top-level call, not only the first. The
+  collector treated the first root returning as the end of the story and
+  discarded everything after it, which made `tell/0` + `stop/0` unable to do the
+  one thing it exists for -- bracketing a region -- and silently truncated the
+  block form, where the output still looked complete.
+
+  The effect was largest where the tool is most useful. When the entry point is
+  framework code the tracer does not follow (a GraphQL runtime, a Plug
+  pipeline), your own functions are reached as a *sequence* of top-level calls;
+  the first one to return ended the trace before the interesting ones ran. In
+  one Absinthe request this meant a trace containing the schema's `context/1`
+  callback and nothing else -- no middleware, no resolver, no repo call.
+
+  `status` still reports `{:completed, tree}` as soon as there is a complete
+  tree to hand out; it simply no longer means "stop listening".
+
+### Changed
+
+- `narrate/2` returns one root per top-level call instead of only the first, and
+  its documentation no longer describes the old limitation. ⚠ A caller that
+  pattern-matched `[root] = tree` on a `fun` with several top-level calls will
+  now match a longer list.
+
+- Calls left open when the region ends -- a `throw`, a `raise`, or a bracket
+  closed mid-call -- are kept in the tree rather than dropped. A call that never
+  came back is usually the one worth seeing.
+
 ## [0.2.0] - 2026-08-29
 
 ### Changed

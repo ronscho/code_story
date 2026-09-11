@@ -44,11 +44,6 @@ defmodule CodeStory.Collector do
   end
 
   @impl true
-  def handle_cast({:trace_event, _event}, %{status: {:completed, _}} = state) do
-    # Ignore events after auto-stop
-    {:noreply, state}
-  end
-
   def handle_cast({:trace_event, {:call, {mod, fun, args}}}, state) do
     # Sticky: a call event has now been observed. Lets `narrate` distinguish a
     # genuinely call-free run (never true) from a large trace still draining
@@ -105,6 +100,10 @@ defmodule CodeStory.Collector do
         # sentinels stay on the stack above the updated parent — they haven't
         # returned yet. A real node with no real ancestor is a root -> auto-stop.
         case Enum.split_while(rest, &(not is_map(&1))) do
+          # A root has closed, so there is a complete tree to hand out -- and
+          # there may be more to come. `status` says "complete as of now"; it no
+          # longer says "stop listening". A traced region may hold several
+          # top-level calls, and one of them returning is not the end of it.
           {_sentinels, []} ->
             new_tree = state.tree ++ [completed]
             {:noreply, %{state | tree: new_tree, stack: [], status: {:completed, new_tree}}}
@@ -130,6 +129,17 @@ defmodule CodeStory.Collector do
   # Completion-aware progress for `narrate`'s bounded poll. `tree` is only ever
   # populated at completion, so a caller must wait for `{:completed, tree}`;
   # `saw_call` tells it whether any call has arrived yet (draining vs. call-free).
+  # The end of the story, set by whoever opened it. Everything already closed is
+  # in `tree`; anything still on the stack is a call that never returned -- a
+  # `throw`, a `raise`, or a region ended mid-call -- and is kept rather than
+  # dropped, because a call that did not come back is usually the interesting
+  # one.
+  def handle_call(:finish, _from, state) do
+    tree = state.tree ++ Enum.reverse(Enum.filter(state.stack, &is_map/1))
+
+    {:reply, tree, %{state | tree: tree, stack: [], status: {:completed, tree}}}
+  end
+
   def handle_call(:trace_progress, _from, state) do
     reply =
       case state.status do

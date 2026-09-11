@@ -101,7 +101,7 @@ defmodule CodeStory.NarrateTest do
       assert :build_result in functions(shown)
     end
 
-    test "captures only the first top-level call (freeze-after-first)" do
+    test "captures every top-level call, in order" do
       {result, tree} =
         CodeStory.narrate(fn ->
           SampleApp.add(1, 1)
@@ -109,8 +109,11 @@ defmodule CodeStory.NarrateTest do
         end)
 
       assert result == 20
-      assert [root] = tree
-      assert root.function == :add
+      assert [first, second] = tree
+      assert first.function == :add
+      assert second.function == :add_sub_mult
+      # The later root keeps its own subtree -- it is a root, not a leaf.
+      assert second.children != []
     end
   end
 end

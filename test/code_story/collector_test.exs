@@ -110,17 +110,26 @@ defmodule CodeStory.CollectorTest do
       GenServer.stop(pid)
     end
 
-    test "ignores events after auto-stop" do
+    # A completed root does not close the collector. Events after it are still
+    # recorded -- an unreturned call sits on the stack rather than in the tree,
+    # and a second completed root joins the first.
+    test "keeps recording after a root completes" do
       pid = start_collector()
 
       GenServer.cast(pid, {:trace_event, {:call, {MyApp, :add, [3, 2]}}})
       GenServer.cast(pid, {:trace_event, {:return_from, {MyApp, :add, 2}, 5}})
 
-      # This event arrives after auto-stop — should be ignored
+      # Still open: recorded, but not yet part of the tree.
       GenServer.cast(pid, {:trace_event, {:call, {MyApp, :add, [10, 20]}}})
 
       {:completed, tree, _opts} = GenServer.call(pid, :get_result)
       assert length(tree) == 1
+
+      GenServer.cast(pid, {:trace_event, {:return_from, {MyApp, :add, 2}, 30}})
+
+      {:completed, tree, _opts} = GenServer.call(pid, :get_result)
+      assert [%{return: 5}, %{return: 30}] = tree
+
       GenServer.stop(pid)
     end
 
