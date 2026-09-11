@@ -55,16 +55,32 @@ defmodule CodeStory.SpawnedProcessTest do
       assert "add" in functions(tree)
     end
 
-    test "concurrent processes do not bleed into each other's trees" do
+    # Siblings are kept apart by the same thing that places them: the anchor is
+    # taken from the PARENT's stack at spawn time, not from whatever happens to
+    # be open somewhere. Three tasks started under one call therefore become
+    # three siblings -- asserted structurally, because "all three names appear"
+    # would also pass if one had swallowed the others.
+    test "concurrent processes become siblings, not each other's children" do
       {result, tree} = CodeStory.narrate(fn -> SampleApp.in_parallel_tasks(10) end)
 
       assert result == [11, 9, 20]
+      assert [%{function: :in_parallel_tasks, children: children}] = tree
+      assert Enum.map(children, & &1.function) == [:add, :subtract, :mult]
 
-      # All three ran; none of them swallowed another as a child.
-      names = functions(tree)
-      assert "add" in names
-      assert "subtract" in names
-      assert "mult" in names
+      # And none of them carries any of the others underneath it.
+      for child <- children do
+        assert child.children == []
+      end
+    end
+
+    # The other direction: a spawn inside a spawn nests, rather than flattening
+    # into the caller's sequence.
+    test "a nested spawn nests" do
+      {_result, tree} = CodeStory.narrate(fn -> SampleApp.in_a_nested_task(4) end)
+
+      assert [%{function: :in_a_nested_task, children: [inner]}] = tree
+      assert inner.function == :in_a_task
+      assert Enum.map(inner.children, & &1.function) == [:add]
     end
   end
 

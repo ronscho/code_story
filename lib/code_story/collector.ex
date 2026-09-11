@@ -197,6 +197,12 @@ defmodule CodeStory.Collector do
         node -> {:under, node.ref}
       end
 
+    # `Map.put`, deliberately overwriting. A child's first call can reach the
+    # collector before its parent's spawn event -- they come from two different
+    # processes, so nothing orders them against each other -- and `anchor_unknown`
+    # will have guessed an anchor by then. This is the precise one: it names the
+    # real parent and the node that was open in it at the moment of the spawn.
+    # The guess loses, which is the outcome wanted.
     {:noreply,
      %{
        state
@@ -321,6 +327,11 @@ defmodule CodeStory.Collector do
   # call arrives. For a synchronous `GenServer.call` that is exactly right: the
   # caller is blocked inside the call, so the node open above it is the one that
   # asked for this work.
+  #
+  # ⚠ It is also a provisional answer for a spawned process whose spawn event has
+  # not arrived yet -- the two messages come from different processes and nothing
+  # orders them. That case corrects itself: the spawn handler overwrites this with
+  # the real parent and the node open in it at the time.
   defp anchor_unknown(pid, state) do
     if pid == state.caller_pid or Map.has_key?(state.spawns, pid) do
       state
