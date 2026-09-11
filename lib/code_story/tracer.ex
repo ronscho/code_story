@@ -13,7 +13,7 @@ defmodule CodeStory.Tracer do
   The `collector_pid` receives trace messages directly.
   Returns `:ok` or `{:error, reason}`.
   """
-  def start_tracing(collector_pid, modules, traced_pid) do
+  def start_tracing(collector_pid, modules, traced_pid, follow \\ []) do
     try do
       # Use a unique session name to avoid conflicts
       session_name = :"code_story_trace_#{:erlang.unique_integer([:positive])}"
@@ -24,6 +24,22 @@ defmodule CodeStory.Tracer do
       # `:procs` adds the spawn and exit events: spawn says where a child's tree
       # belongs, exit says when it can no longer grow.
       :trace.process(session, traced_pid, true, [:call, :set_on_spawn, :procs])
+
+      # Processes that were already running when the trace started. They have no
+      # spawn to inherit flags from, so each is attached by hand.
+      #
+      # ⚠ `:trace.process/4` rejects a registered name -- "invalid process spec",
+      # unlike the legacy `:erlang.trace/3`. Resolving it here also lets a name
+      # nobody registered be reported instead of quietly doing nothing.
+      Enum.each(follow, fn target ->
+        case resolve(target) do
+          nil ->
+            IO.warn("CodeStory: follow: no process registered as #{inspect(target)}")
+
+          pid ->
+            :trace.process(session, pid, true, [:call, :set_on_spawn, :procs])
+        end
+      end)
 
       match_spec = [{:_, [], [{:return_trace}]}]
 
@@ -52,6 +68,14 @@ defmodule CodeStory.Tracer do
         {:error, "Failed to start tracing: #{Exception.message(e)}"}
     end
   end
+
+  defp resolve(pid) when is_pid(pid), do: if(Process.alive?(pid), do: pid)
+  defp resolve(name) when is_atom(name), do: Process.whereis(name)
+  defp resolve({:global, name}), do: nilify(:global.whereis_name(name))
+  defp resolve(_), do: nil
+
+  defp nilify(:undefined), do: nil
+  defp nilify(pid), do: pid
 
   @doc """
   Stops tracing and cleans up. Idempotent — safe to call multiple times.

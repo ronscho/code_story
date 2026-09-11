@@ -33,6 +33,13 @@ defmodule CodeStory do
       or returns) for inspecting call flow and boundaries;
       `:short_story` (default) shows names, truncated values, and returns;
       `:novel` shows names with complete untruncated values and returns
+    * `:follow` - processes to trace besides the calling one, as registered names
+      or pids: `follow: [MyApp.Cache, some_pid]`. Processes the traced code
+      *starts* are followed automatically; this is for the ones that were already
+      running — a supervised GenServer, a registry, a channel — which have no
+      spawn to inherit from. Their calls appear under the call that reached them,
+      which for a synchronous `GenServer.call` is exactly where they belong. A
+      name nobody has registered is reported and the trace runs without it.
     * `:auto_boundary` - when `true` (default), Ecto repos are treated as
       *boundary modules*: a repo call (e.g. `Repo.get!`) is shown as a single
       node with its args and return, but the repo's own internal calls (Ecto
@@ -163,10 +170,12 @@ defmodule CodeStory do
     * Traces the calling process. Every top-level call inside `fun` becomes a root
       of the returned tree, in call order, so `fun` may bracket a region rather
       than wrap a single entry call. A `fun` with no traced calls returns
-      `{result, []}`. ⚠ Calls made by processes that `fun` spawns are not traced.
-    * `opts` are trace-time only — currently `:auto_boundary` (default `true`, as in
-      `tell/1`). Pass `auto_boundary: false` to include an Ecto repo's internals in
-      the raw tree.
+      `{result, []}`. Processes `fun` spawns are followed; ones that were already
+      running are followed when named in `:follow`.
+    * `opts` are trace-time only — `:auto_boundary` (default `true`, as in
+      `tell/1`) and `:follow`. Pass `auto_boundary: false` to include an Ecto
+      repo's internals in the raw tree; pass `follow:` to trace processes that
+      were already running.
     * **Raises** `ArgumentError` if a trace is already active on this process
       (unlike `tell/1`, which returns `{:error, :already_tracing}` — a tagged tuple
       would be ambiguous with a legitimate `{:error, tree}` result).
@@ -368,7 +377,9 @@ defmodule CodeStory do
 
     {:ok, collector_pid} = CodeStory.Collector.start(self(), args_map, opts)
 
-    case CodeStory.Tracer.start_tracing(collector_pid, modules, self()) do
+    follow = Keyword.get(opts, :follow, [])
+
+    case CodeStory.Tracer.start_tracing(collector_pid, modules, self(), follow) do
       :ok ->
         Process.put(@collector_key, collector_pid)
         :ok

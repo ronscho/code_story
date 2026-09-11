@@ -176,6 +176,8 @@ defmodule CodeStory.Collector do
   # The Collector pid is set as the tracer, so messages arrive here directly
   @impl true
   def handle_info({:trace, pid, :call, {mod, fun, args}}, state) do
+    state = anchor_unknown(pid, state)
+
     for_pid(pid, state, &handle_cast({:trace_event, {:call, {mod, fun, args}}}, &1))
   end
 
@@ -311,6 +313,28 @@ defmodule CodeStory.Collector do
   defp attach(tree, {:root_at, index}, child_tree) do
     {before, rest} = Enum.split(tree, index)
     before ++ child_tree ++ rest
+  end
+
+  # A process heard from for the first time that nobody spawned -- one named in
+  # `follow:`, already running before the trace began. It has no spawn event, so
+  # its anchor is taken now, from where the caller stands at the moment its first
+  # call arrives. For a synchronous `GenServer.call` that is exactly right: the
+  # caller is blocked inside the call, so the node open above it is the one that
+  # asked for this work.
+  defp anchor_unknown(pid, state) do
+    if pid == state.caller_pid or Map.has_key?(state.spawns, pid) do
+      state
+    else
+      {tree, stack} = Map.get(state.pids, state.caller_pid, {[], []})
+
+      anchor =
+        case Enum.find(stack, &is_map/1) do
+          nil -> {:root_at, length(tree)}
+          node -> {:under, node.ref}
+        end
+
+      %{state | spawns: Map.put(state.spawns, pid, {state.caller_pid, anchor})}
+    end
   end
 
   # Swaps one process's tree and stack in, runs the existing single-process

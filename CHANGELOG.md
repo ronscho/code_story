@@ -28,6 +28,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Repeated children collapse through the existing `:fold_repeats`, so a batch
   runner's two dozen bookkeeping calls read as `×24` rather than two dozen lines.
 
+- A `:follow` option traces processes that were already running, by registered
+  name or pid: `follow: [MyApp.Cache]`. Spawn-following covers what the traced
+  code starts; this covers what it merely talks to — a supervised GenServer, a
+  registry, a channel — where a `GenServer.call` otherwise shows the caller
+  blocking and nothing of the work it asked for. ⚠ `:trace.process/4` rejects a
+  registered name, unlike the legacy `:erlang.trace/3`, so names are resolved
+  before attaching; one nobody registered is reported rather than silently
+  ignored.
+
 ### Changed
 
 - Collecting now waits, briefly and with a ceiling, for spawned processes to
