@@ -32,10 +32,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   name or pid: `follow: [MyApp.Cache]`. Spawn-following covers what the traced
   code starts; this covers what it merely talks to — a supervised GenServer, a
   registry, a channel — where a `GenServer.call` otherwise shows the caller
-  blocking and nothing of the work it asked for. ⚠ `:trace.process/4` rejects a
-  registered name, unlike the legacy `:erlang.trace/3`, so names are resolved
-  before attaching; one nobody registered is reported rather than silently
-  ignored.
+  blocking and nothing of the work it asked for.
+
+  A target may be named any way OTP allows (a pid, a registered atom,
+  `{:global, term}`, `{:via, Registry, key}`) or given as a zero-arity function
+  returning a pid, for a process carrying no name at all. ⚠ `:trace.process/4`
+  rejects a registered name, unlike the legacy `:erlang.trace/3`, so targets are
+  resolved through `GenServer.whereis/1` before attaching — and a target that
+  cannot be reached, including a pid that has already died, is reported rather
+  than silently ignored.
 
 ### Changed
 

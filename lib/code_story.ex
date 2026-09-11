@@ -33,8 +33,11 @@ defmodule CodeStory do
       or returns) for inspecting call flow and boundaries;
       `:short_story` (default) shows names, truncated values, and returns;
       `:novel` shows names with complete untruncated values and returns
-    * `:follow` - processes to trace besides the calling one, as registered names
-      or pids: `follow: [MyApp.Cache, some_pid]`. Processes the traced code
+    * `:follow` - processes to trace besides the calling one, named any way OTP
+      allows — a pid, a registered atom, `{:global, term}`, `{:via, Registry,
+      key}` — or a zero-arity function returning a pid, for a process with no
+      name at all: `follow: [MyApp.Cache, some_pid, fn -> lookup() end]`.
+      Processes the traced code
       *starts* are followed automatically; this is for the ones that were already
       running — a supervised GenServer, a registry, a channel — which have no
       spawn to inherit from. Their calls appear under the call that reached them,

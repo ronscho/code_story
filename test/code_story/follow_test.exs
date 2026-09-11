@@ -103,6 +103,55 @@ defmodule CodeStory.FollowTest do
     end
   end
 
+  describe "how a process may be named" do
+    # A Registry hands out `{:via, Registry, {Name, key}}`, which is the form
+    # most likely to be passed here and the one a hand-rolled resolver misses.
+    test "a via-tuple from a Registry" do
+      start_supervised!({Registry, keys: :unique, name: FollowRegistry})
+
+      {:ok, srv} =
+        Counter.start_link({:via, Registry, {FollowRegistry, :counter}})
+
+      {_result, tree} =
+        CodeStory.narrate(fn -> GenServer.call(srv, {:bump, 1}) end,
+          follow: [{:via, Registry, {FollowRegistry, :counter}}]
+        )
+
+      assert "handle_call" in functions(tree)
+    end
+
+    # For a process with no name at all: work the pid out yourself.
+    test "a zero-arity function returning the pid" do
+      {:ok, srv} = Counter.start_link(:counter_by_fun)
+
+      {_result, tree} =
+        CodeStory.narrate(fn -> GenServer.call(srv, {:bump, 1}) end,
+          follow: [fn -> Process.whereis(:counter_by_fun) end]
+        )
+
+      assert "handle_call" in functions(tree)
+
+      GenServer.stop(srv)
+    end
+
+    test "a pid that has already died is reported, not attached" do
+      {:ok, srv} = Counter.start_link(:counter_dead)
+      GenServer.stop(srv)
+
+      output =
+        capture_io(:stderr, fn ->
+          {result, _tree} =
+            CodeStory.narrate(fn -> CodeStory.TestSupport.SampleApp.add(1, 2) end,
+              follow: [srv]
+            )
+
+          assert result == 3
+        end)
+
+      assert output =~ "follow"
+    end
+  end
+
   describe "what stays the same" do
     test "no follow: behaves exactly as before" do
       {result, tree} =

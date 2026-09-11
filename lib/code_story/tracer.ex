@@ -69,13 +69,27 @@ defmodule CodeStory.Tracer do
     end
   end
 
-  defp resolve(pid) when is_pid(pid), do: if(Process.alive?(pid), do: pid)
-  defp resolve(name) when is_atom(name), do: Process.whereis(name)
-  defp resolve({:global, name}), do: nilify(:global.whereis_name(name))
-  defp resolve(_), do: nil
+  # A zero-arity function, for a process that carries no name at all: compute
+  # the pid however you have to and hand it back.
+  defp resolve(fun) when is_function(fun, 0), do: resolve(fun.())
 
-  defp nilify(:undefined), do: nil
-  defp nilify(pid), do: pid
+  defp resolve(target) do
+    # `GenServer.whereis/1` knows every name form OTP has -- a pid, a registered
+    # atom, `{:global, term}`, `{:via, module, term}`, `{name, node}` -- and
+    # answers `nil` for anything it cannot find. Re-deriving that by hand only
+    # produces a worse copy that misses `:via`, which is the form a Registry
+    # hands out and therefore the one most likely to be passed here.
+    case GenServer.whereis(target) do
+      pid when is_pid(pid) -> if Process.alive?(pid), do: pid
+      # A registered name on another node. Tracing does not reach across one.
+      _ -> nil
+    end
+  rescue
+    # `whereis` runs the `:via` module's own lookup, which is somebody else's
+    # code and may raise on a malformed term. A bad target should be reported,
+    # not crash the trace before it starts.
+    _ -> nil
+  end
 
   @doc """
   Stops tracing and cleans up. Idempotent — safe to call multiple times.
