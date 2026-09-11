@@ -42,7 +42,10 @@ defmodule CodeStory do
       running — a supervised GenServer, a registry, a channel — which have no
       spawn to inherit from. Their calls appear under the call that reached them,
       which for a synchronous `GenServer.call` is exactly where they belong. A
-      name nobody has registered is reported and the trace runs without it.
+      target that cannot be reached — including a pid that has already died — is
+      reported and the trace runs without it. ⚠ Following attaches to a
+      *process*, not to a conversation: everything that process does during the
+      window is recorded, including work other callers asked it for.
     * `:auto_boundary` - when `true` (default), Ecto repos are treated as
       *boundary modules*: a repo call (e.g. `Repo.get!`) is shown as a single
       node with its args and return, but the repo's own internal calls (Ecto

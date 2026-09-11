@@ -152,6 +152,41 @@ defmodule CodeStory.FollowTest do
     end
   end
 
+  describe "a followed process is shared" do
+    # Following attaches to a process, not to a conversation. Everything that
+    # process does inside the window is recorded, including work somebody else
+    # asked it for. Worth knowing before pointing `follow:` at a busy server.
+    test "work another caller asked for shows up too" do
+      {:ok, srv} = Counter.start_link(:counter_shared)
+      me = self()
+
+      {_result, tree} =
+        CodeStory.narrate(
+          fn ->
+            # A different process calls the same server while we are tracing it.
+            spawn(fn ->
+              GenServer.call(:counter_shared, {:bump, 7})
+              send(me, :foreign_done)
+            end)
+
+            receive do
+              :foreign_done -> :ok
+            after
+              1_000 -> flunk("the foreign call never completed")
+            end
+
+            GenServer.call(:counter_shared, {:bump, 1})
+          end,
+          follow: [:counter_shared]
+        )
+
+      # Two handle_call nodes: the foreign one and ours.
+      assert Enum.count(functions(tree), &(&1 == "handle_call")) == 2
+
+      GenServer.stop(srv)
+    end
+  end
+
   describe "what stays the same" do
     test "no follow: behaves exactly as before" do
       {result, tree} =

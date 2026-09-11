@@ -42,6 +42,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cannot be reached, including a pid that has already died, is reported rather
   than silently ignored.
 
+  ⚠ Following attaches to a *process*, not to a conversation. Everything that
+  process does inside the window is recorded, including work other callers asked
+  it for — worth knowing before pointing `follow:` at a busy server.
+
 ### Changed
 
 - Collecting now waits, briefly and with a ceiling, for spawned processes to
