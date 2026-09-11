@@ -16,7 +16,13 @@ defmodule CodeStory.Collector do
     tree: [],
     stack: [],
     boundaries: [],
-    saw_call: false
+    saw_call: false,
+    # One independent build per process. The caller's own entry lives here too,
+    # so there is no special case for it.
+    pids: %{},
+    # child_pid => {parent_pid, anchor} -- where the child's tree belongs.
+    spawns: %{},
+    live: MapSet.new()
   ]
 
   ## Public API
@@ -69,7 +75,12 @@ defmodule CodeStory.Collector do
           function: fun,
           args: named_args,
           return: nil,
-          children: []
+          children: [],
+          # Identity that survives the node being copied from the stack into a
+          # tree. A spawn records the ref of whatever was open at the time, and
+          # the merge finds it again afterwards. Internal only -- `Encoder`
+          # builds its output map field by field and never passes this on.
+          ref: make_ref()
         }
 
         # Tag a boundary *entry* call (the interior-suppress branch ran first, so
@@ -138,8 +149,15 @@ defmodule CodeStory.Collector do
   # `throw`, a `raise`, or a region ended mid-call -- and is kept rather than
   # dropped, because a call that did not come back is usually the interesting
   # one.
+  # How many spawned processes have not been seen to exit yet. A process's own
+  # exit event is ordered behind its own call events, so once this reaches zero
+  # every child has delivered everything it will ever deliver.
+  def handle_call(:pending, _from, state) do
+    {:reply, MapSet.size(state.live), state}
+  end
+
   def handle_call(:finish, _from, state) do
-    tree = state.tree ++ Enum.reverse(Enum.filter(state.stack, &is_map/1))
+    tree = merged_tree(state)
 
     {:reply, tree, %{state | tree: tree, stack: [], status: {:completed, tree}}}
   end
@@ -157,12 +175,44 @@ defmodule CodeStory.Collector do
   # Raw trace messages from :trace session (OTP 28+)
   # The Collector pid is set as the tracer, so messages arrive here directly
   @impl true
-  def handle_info({:trace, _pid, :call, {mod, fun, args}}, state) do
-    handle_cast({:trace_event, {:call, {mod, fun, args}}}, state)
+  def handle_info({:trace, pid, :call, {mod, fun, args}}, state) do
+    for_pid(pid, state, &handle_cast({:trace_event, {:call, {mod, fun, args}}}, &1))
   end
 
-  def handle_info({:trace, _pid, :return_from, {mod, fun, arity}, return_value}, state) do
-    handle_cast({:trace_event, {:return_from, {mod, fun, arity}, return_value}}, state)
+  # Where a child's tree belongs, decided at the moment it is created.
+  #
+  # If the parent has a call open, the child's work happened inside it and hangs
+  # underneath. If it does not -- which is the common case, because the spawn
+  # usually happens in library code this tracer does not follow -- there is no
+  # node to hang it on, and the honest placement is the parent's own sequence,
+  # at the point in time the spawn occurred.
+  def handle_info({:trace, parent, :spawn, child, _mfa}, state) do
+    {tree, stack} = Map.get(state.pids, parent, {[], []})
+
+    anchor =
+      case Enum.find(stack, &is_map/1) do
+        nil -> {:root_at, length(tree)}
+        node -> {:under, node.ref}
+      end
+
+    {:noreply,
+     %{
+       state
+       | spawns: Map.put(state.spawns, child, {parent, anchor}),
+         live: MapSet.put(state.live, child)
+     }}
+  end
+
+  def handle_info({:trace, pid, :exit, _reason}, state) do
+    {:noreply, %{state | live: MapSet.delete(state.live, pid)}}
+  end
+
+  def handle_info({:trace, pid, :return_from, {mod, fun, arity}, return_value}, state) do
+    for_pid(
+      pid,
+      state,
+      &handle_cast({:trace_event, {:return_from, {mod, fun, arity}, return_value}}, &1)
+    )
   end
 
   def handle_info({:DOWN, _ref, :process, pid, _reason}, %{caller_pid: pid} = state) do
@@ -190,6 +240,87 @@ defmodule CodeStory.Collector do
       end
 
     Enum.zip(names, args)
+  end
+
+  # Folds the per-process trees back into one, children first.
+  #
+  # A child is merged into its parent only once the child has absorbed its own
+  # children, so a chain of spawns comes out nested rather than flat. The order
+  # falls out of the data: repeatedly merge every process that nobody still
+  # names as a parent.
+  defp merged_tree(state) do
+    trees = Map.new(state.pids, fn {pid, pair} -> {pid, flush(pair)} end)
+    trees = fold_children(trees, state.spawns)
+
+    trees
+    |> Map.get(state.caller_pid, [])
+    |> strip_refs()
+  end
+
+  # `:ref` is bookkeeping for the merge and stops at this boundary. A node is
+  # `%{module, function, args, return, children}` to everyone outside, which is
+  # what `narrate/2` documents and what callers pattern-match on.
+  defp strip_refs(tree) do
+    Enum.map(tree, fn node ->
+      node
+      |> Map.delete(:ref)
+      |> Map.update!(:children, &strip_refs/1)
+    end)
+  end
+
+  # Anything still on the stack never returned -- a throw, a raise, a region
+  # ended mid-call. Kept: a call that did not come back is usually the one worth
+  # seeing.
+  defp flush({tree, stack}), do: tree ++ Enum.reverse(Enum.filter(stack, &is_map/1))
+
+  defp fold_children(trees, spawns) when map_size(spawns) == 0, do: trees
+
+  defp fold_children(trees, spawns) do
+    parents = MapSet.new(spawns, fn {_child, {parent, _anchor}} -> parent end)
+
+    case Enum.reject(Map.keys(spawns), &MapSet.member?(parents, &1)) do
+      # Every remaining child is also somebody's parent: a spawn cycle, which
+      # cannot happen, or a parent whose own parent we never saw. Stop rather
+      # than loop.
+      [] ->
+        trees
+
+      leaves ->
+        {trees, spawns} =
+          Enum.reduce(leaves, {trees, spawns}, fn child, {trees, spawns} ->
+            {{parent, anchor}, spawns} = Map.pop(spawns, child)
+            {child_tree, trees} = Map.pop(trees, child, [])
+
+            {Map.put(trees, parent, attach(Map.get(trees, parent, []), anchor, child_tree)),
+             spawns}
+          end)
+
+        fold_children(trees, spawns)
+    end
+  end
+
+  defp attach(tree, _anchor, []), do: tree
+
+  defp attach(tree, {:under, ref}, child_tree) do
+    Enum.map(tree, fn
+      %{ref: ^ref} = node -> %{node | children: node.children ++ child_tree}
+      node -> %{node | children: attach(node.children, {:under, ref}, child_tree)}
+    end)
+  end
+
+  defp attach(tree, {:root_at, index}, child_tree) do
+    {before, rest} = Enum.split(tree, index)
+    before ++ child_tree ++ rest
+  end
+
+  # Swaps one process's tree and stack in, runs the existing single-process
+  # logic on them, and puts the result back. Events from different processes
+  # arrive interleaved in one mailbox; this is what keeps them apart.
+  defp for_pid(pid, state, fun) do
+    {tree, stack} = Map.get(state.pids, pid, {[], []})
+    {:noreply, next} = fun.(%{state | tree: tree, stack: stack})
+
+    {:noreply, %{next | pids: Map.put(next.pids, pid, {next.tree, next.stack})}}
   end
 
   defp dunder?(fun) do

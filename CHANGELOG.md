@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Calls made by processes the traced code **spawns** are now part of the trace.
+  `:set_on_spawn` hands the trace flags to every process a traced one starts, so
+  the recursion costs no code; the collector keeps a tree per process while
+  their events interleave, and folds each child's tree back into its parent.
+
+  This matters most where the work is not in the calling process at all. A
+  Dataloader batch resolves through `Task.async_stream`, so on a GraphQL request
+  the queries actually being run were exactly the part that went missing — while
+  the trace still looked complete, which is the worse failure.
+
+  Placement follows what is knowable. If the spawning call is one the tracer was
+  already inside, the child's tree hangs underneath it. If it is not — the common
+  case, because the spawn usually happens in framework code — there is no node to
+  hang it on, and the child's tree takes its place in the parent's own sequence
+  at the point in time the spawn occurred.
+
+  Repeated children collapse through the existing `:fold_repeats`, so a batch
+  runner's two dozen bookkeeping calls read as `×24` rather than two dozen lines.
+
+### Changed
+
+- Collecting now waits, briefly and with a ceiling, for spawned processes to
+  exit before it stops tracing. A process's exit event is ordered behind its own
+  calls, so a child seen to exit has delivered everything — and a child that
+  outlives the traced region is given up on rather than allowed to hold the
+  trace. The single-process ordering argument does not carry across processes,
+  so this replaces it rather than adding to it.
+
 ### Fixed
 
 - A traced region now records **every** top-level call, not only the first. The

@@ -46,4 +46,43 @@ defmodule CodeStory.TestSupport.SampleApp do
 
   defp classify(n) when n >= 0, do: {:non_negative, n}
   defp classify(n), do: {:negative, n}
+
+  # Spawns a task and waits for it. The work happens in another process, so a
+  # tracer that only follows the caller sees the `Task.await` and nothing of
+  # what was awaited.
+  def in_a_task(x) do
+    task = Task.async(fn -> add(x, x) end)
+    Task.await(task)
+  end
+
+  # Two levels deep: the task spawns a task of its own.
+  def in_a_nested_task(x) do
+    task = Task.async(fn -> in_a_task(x) end)
+    Task.await(task)
+  end
+
+  # Several tasks at once — their events interleave in the collector's mailbox,
+  # so each process needs its own stack or the trees bleed into each other.
+  def in_parallel_tasks(x) do
+    [fn -> add(x, 1) end, fn -> subtract(x, 1) end, fn -> mult(x, 2) end]
+    |> Enum.map(&Task.async/1)
+    |> Enum.map(&Task.await/1)
+  end
+
+  # Spawns and does NOT wait. The child outlives the traced region, so its exit
+  # is never seen — the drain has to give up on it rather than hang.
+  def detached_task(x) do
+    Task.start(fn ->
+      Process.sleep(2_000)
+      add(x, x)
+    end)
+
+    :started
+  end
+
+  # A spawned process whose only call is into a boundary module.
+  def boundary_only_task(id) do
+    task = Task.async(fn -> CodeStory.TestSupport.FakeRepo.get(id) end)
+    Task.await(task)
+  end
 end

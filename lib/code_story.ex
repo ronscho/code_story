@@ -430,7 +430,22 @@ defmodule CodeStory do
   # ⚠ That guarantee covers the traced process only. It does not extend to
   # processes it spawned, which is why following spawned processes needs a
   # different barrier than this one.
+  # Wait for spawned processes, THEN stop tracing, THEN ask for the tree.
+  #
+  # The order is the barrier, and each step earns its place. Messages from a
+  # child are not ordered against our own `GenServer.call`, so the single-process
+  # argument does not carry here -- but a process's exit event *is* ordered
+  # behind its own calls, so a child that has been seen to exit has delivered
+  # everything. Waiting has to happen while tracing is still on, since stopping
+  # it is what ends the events we are waiting for.
+  #
+  # A child that outlives the region never exits, so the wait is bounded: its
+  # calls up to that point are kept, and the trace is produced rather than
+  # withheld.
+  @drain_ceiling_ms 200
+
   defp collect(pid) do
+    drain(pid, 0)
     CodeStory.Tracer.stop_tracing()
 
     try do
@@ -438,6 +453,23 @@ defmodule CodeStory do
     catch
       :exit, {:noproc, _} -> []
     end
+  end
+
+  defp drain(pid, waited) do
+    case GenServer.call(pid, :pending) do
+      0 ->
+        :ok
+
+      _ when waited >= @drain_ceiling_ms ->
+        :ok
+
+      _ ->
+        Process.sleep(2)
+        drain(pid, waited + 2)
+    end
+  catch
+    :exit, {:noproc, _} -> :ok
+    :exit, {:normal, _} -> :ok
   end
 
   defp output_result(tree, _opts) when tree == [], do: :ok

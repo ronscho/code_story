@@ -19,7 +19,11 @@ defmodule CodeStory.Tracer do
       session_name = :"code_story_trace_#{:erlang.unique_integer([:positive])}"
       session = :trace.session_create(session_name, collector_pid, [])
 
-      :trace.process(session, traced_pid, true, [:call])
+      # `:set_on_spawn` hands the flags to every process the traced one starts,
+      # so following the recursion needs no code of ours -- the runtime does it.
+      # `:procs` adds the spawn and exit events: spawn says where a child's tree
+      # belongs, exit says when it can no longer grow.
+      :trace.process(session, traced_pid, true, [:call, :set_on_spawn, :procs])
 
       match_spec = [{:_, [], [{:return_trace}]}]
 
