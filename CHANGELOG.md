@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `:boundaries` accepts modules of your own, alongside the repos
+  `:auto_boundary` detects: `boundaries: [MyApp.Accounts]`. The collector always
+  handled an arbitrary list — suppress the interior, tag the entry — but
+  `do_start/1` overwrote it with the detected repos, so a declared boundary was
+  discarded without a word.
+
+  Detecting repos is a good default and not the whole story. Where a functional
+  core ends and a boundary begins is a *design decision*, not something a tool
+  can sniff out of a module: a context, an adapter, a client wrapper are all
+  boundaries by intent. With one declared, a trace reads the way the system was
+  designed — the core expanded, the crossing as a single edge.
+
+  Declared and detected add up; `auto_boundary: false` leaves only what was
+  declared.
+
+### Added
+
 - Calls made by processes the traced code **spawns** are now part of the trace.
   `:set_on_spawn` hands the trace flags to every process a traced one starts, so
   the recursion costs no code; the collector keeps a tree per process while

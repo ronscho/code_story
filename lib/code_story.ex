@@ -46,6 +46,11 @@ defmodule CodeStory do
       reported and the trace runs without it. ⚠ Following attaches to a
       *process*, not to a conversation: everything that process does during the
       window is recorded, including work other callers asked it for.
+    * `:boundaries` - modules to treat as boundaries, beyond the ones
+      `:auto_boundary` finds: `boundaries: [MyApp.Accounts, MyApp.MailClient]`.
+      Where a functional core ends and a boundary begins is a design decision,
+      not a property a tool can detect — a context, an adapter, a client wrapper
+      are all boundaries by intent. Declared and detected ones add up.
     * `:auto_boundary` - when `true` (default), Ecto repos are treated as
       *boundary modules*: a repo call (e.g. `Repo.get!`) is shown as a single
       node with its args and return, but the repo's own internal calls (Ecto
@@ -372,14 +377,20 @@ defmodule CodeStory do
 
     # `tell/1` merges the `auto_boundary: true` default, so the value is always
     # present here — the default lives in exactly one place (the merge above).
-    boundaries =
+    # Declared boundaries and detected ones add up. `auto_boundary` decides
+    # whether repos are found for you; `boundaries:` is where you say which of
+    # your own modules marks the edge of your core -- a decision the tool cannot
+    # sniff out, because it is a design decision and not a library property.
+    detected =
       if Keyword.get(opts, :auto_boundary) do
         CodeStory.Modules.ecto_repos(modules)
       else
         []
       end
 
-    opts = Keyword.put(opts, :boundaries, boundaries)
+    declared = Keyword.get(opts, :boundaries, [])
+
+    opts = Keyword.put(opts, :boundaries, Enum.uniq(declared ++ detected))
 
     {:ok, collector_pid} = CodeStory.Collector.start(self(), args_map, opts)
 
