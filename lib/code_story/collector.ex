@@ -98,7 +98,7 @@ defmodule CodeStory.Collector do
         # Attach to the nearest REAL ancestor, skipping any sentinels
         # (`:skip_dunder` / `:skip_boundary` are atoms, not maps). The skipped
         # sentinels stay on the stack above the updated parent — they haven't
-        # returned yet. A real node with no real ancestor is a root -> auto-stop.
+        # returned yet. A real node with no real ancestor is a root.
         case Enum.split_while(rest, &(not is_map(&1))) do
           # A root has closed, so there is a complete tree to hand out -- and
           # there may be more to come. `status` says "complete as of now"; it no
@@ -126,9 +126,13 @@ defmodule CodeStory.Collector do
     end
   end
 
-  # Completion-aware progress for `narrate`'s bounded poll. `tree` is only ever
-  # populated at completion, so a caller must wait for `{:completed, tree}`;
-  # `saw_call` tells it whether any call has arrived yet (draining vs. call-free).
+  # Completion-aware progress. `tree` carries every root closed so far, and
+  # `{:completed, tree}` means "complete as of now" rather than "finished";
+  # `saw_call` tells a caller whether any call has arrived yet at all.
+  #
+  # NOTE: the library itself no longer polls this — `collect/1` stops tracing and
+  # asks for `:finish`, which is exact rather than timed. Kept as part of the
+  # collector's API.
   # The end of the story, set by whoever opened it. Everything already closed is
   # in `tree`; anything still on the stack is a call that never returned -- a
   # `throw`, a `raise`, or a region ended mid-call -- and is kept rather than

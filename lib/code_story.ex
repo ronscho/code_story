@@ -263,7 +263,7 @@ defmodule CodeStory do
           try do
             result = fun.()
 
-            # Collect + render is best-effort: fetch_tree can :exit on a wedged
+            # Collect + render is best-effort: collect/1 can :exit on a wedged
             # collector, output_result can raise (File.write! / formatter). Neither
             # may clobber a successful fun, so both are guarded (rescue AND catch).
             try do
@@ -422,14 +422,6 @@ defmodule CodeStory do
   # `tree` at completion (nodes live on its stack until then) — so there is no
   # observable "partial tree", only `:tracing` vs `:completed`. Poll `:completed`.
   #
-  # The catch: a still-draining large trace and a genuinely call-free `fun` both
-  # look like `:tracing` with an empty tree. The collector's sticky `saw_call`
-  # flag distinguishes them: once a call has arrived, we keep waiting (up to a
-  # generous ceiling) for `:completed`; if no call has arrived past a short grace,
-  # the `fun` made no traced calls and we return `[]`.
-  @saw_call_grace_ms 50
-  @completion_ceiling_ms 5_000
-
   # Stop tracing first, then ask for the tree. The order is the barrier: trace
   # messages for this process are delivered in order relative to our own
   # `GenServer.call`, so once no further events can be generated, everything
@@ -446,30 +438,6 @@ defmodule CodeStory do
     catch
       :exit, {:noproc, _} -> []
     end
-  end
-
-  defp fetch_tree(pid), do: fetch_tree(pid, 0)
-
-  defp fetch_tree(pid, waited) do
-    case GenServer.call(pid, :trace_progress) do
-      {:completed, tree} ->
-        tree
-
-      # No call ever observed past the grace window → the fun made no traced calls.
-      {:tracing, false} when waited >= @saw_call_grace_ms ->
-        []
-
-      # A call arrived but completion is taking unusually long → give up safely.
-      {:tracing, _saw_call} when waited >= @completion_ceiling_ms ->
-        []
-
-      {:tracing, _saw_call} ->
-        Process.sleep(2)
-        fetch_tree(pid, waited + 2)
-    end
-  catch
-    :exit, {:noproc, _} -> []
-    :exit, {:normal, _} -> []
   end
 
   defp output_result(tree, _opts) when tree == [], do: :ok
