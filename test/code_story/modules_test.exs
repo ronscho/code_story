@@ -37,7 +37,17 @@ defmodule CodeStory.ModulesTest do
     end
 
     test "an unknown namespace adds nothing and raises nothing" do
-      assert CodeStory.Modules.detect(["NoSuchNamespace"]) == CodeStory.Modules.detect()
+      # ⚠ Not a comparison against a second `detect/0` call. Detection reads
+      # `:code.all_available()`, and a module can become available between two
+      # calls -- another test loading one is enough -- so comparing two
+      # snapshots is order-dependent. The claim is about the namespaces.
+      namespaces =
+        ["NoSuchNamespace"]
+        |> CodeStory.Modules.detect()
+        |> Enum.map(&hd(Module.split(&1)))
+        |> Enum.uniq()
+
+      assert namespaces -- ["CodeStory", "CodeStoryWeb"] == []
     end
   end
 
