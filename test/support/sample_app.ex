@@ -69,6 +69,12 @@ defmodule CodeStory.TestSupport.SampleApp do
     |> Enum.map(&Task.await/1)
   end
 
+  # Sleeps, so a measured duration has something to measure.
+  def slow(ms) do
+    :timer.sleep(ms)
+    ms
+  end
+
   # Spawns and does NOT wait. The child outlives the traced region, so its exit
   # is never seen — the drain has to give up on it rather than hang.
   def detached_task(x) do

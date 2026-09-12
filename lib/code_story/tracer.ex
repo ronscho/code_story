@@ -13,7 +13,7 @@ defmodule CodeStory.Tracer do
   The `collector_pid` receives trace messages directly.
   Returns `:ok` or `{:error, reason}`.
   """
-  def start_tracing(collector_pid, modules, traced_pid, follow \\ []) do
+  def start_tracing(collector_pid, modules, traced_pid, follow \\ [], timing \\ false) do
     try do
       # Use a unique session name to avoid conflicts
       session_name = :"code_story_trace_#{:erlang.unique_integer([:positive])}"
@@ -23,7 +23,11 @@ defmodule CodeStory.Tracer do
       # so following the recursion needs no code of ours -- the runtime does it.
       # `:procs` adds the spawn and exit events: spawn says where a child's tree
       # belongs, exit says when it can no longer grow.
-      :trace.process(session, traced_pid, true, [:call, :set_on_spawn, :procs])
+      # `:timestamp` makes the runtime stamp every trace message. That is work
+      # per call, so it is only asked for when durations are wanted.
+      flags = [:call, :set_on_spawn, :procs] ++ if timing, do: [:timestamp], else: []
+
+      :trace.process(session, traced_pid, true, flags)
 
       # Processes that were already running when the trace started. They have no
       # spawn to inherit flags from, so each is attached by hand.
@@ -37,7 +41,7 @@ defmodule CodeStory.Tracer do
             IO.warn("CodeStory: follow: no process registered as #{inspect(target)}")
 
           pid ->
-            :trace.process(session, pid, true, [:call, :set_on_spawn, :procs])
+            :trace.process(session, pid, true, flags)
         end
       end)
 

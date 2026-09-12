@@ -46,6 +46,12 @@ defmodule CodeStory do
       reported and the trace runs without it. ⚠ Following attaches to a
       *process*, not to a conversation: everything that process does during the
       window is recorded, including work other callers asked it for.
+    * `:timing` - when `true`, every node carries `duration` in microseconds.
+      Off by default: the `:timestamp` trace flag makes the runtime stamp every
+      message, which is work per call, and a trace read for structure should not
+      pay for it. ⚠ A duration is **total** — the call and everything beneath it,
+      including the tracing overhead of everything beneath it. Good for comparing
+      siblings, misleading as a benchmark.
     * `:boundaries` - modules to treat as boundaries, beyond the ones
       `:auto_boundary` finds: `boundaries: [MyApp.Accounts, MyApp.MailClient]`.
       Where a functional core ends and a boundary begins is a design decision,
@@ -396,7 +402,9 @@ defmodule CodeStory do
 
     follow = Keyword.get(opts, :follow, [])
 
-    case CodeStory.Tracer.start_tracing(collector_pid, modules, self(), follow) do
+    timing = Keyword.get(opts, :timing, false)
+
+    case CodeStory.Tracer.start_tracing(collector_pid, modules, self(), follow, timing) do
       :ok ->
         Process.put(@collector_key, collector_pid)
         :ok

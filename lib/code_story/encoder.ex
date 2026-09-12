@@ -53,6 +53,9 @@ defmodule CodeStory.Encoder do
     base
     |> maybe_put(:count, Map.get(node, :count))
     |> maybe_put(:varies, Map.get(node, :varies))
+    # Only present when the trace ran with `timing: true`; `maybe_put` keeps it
+    # out of the shape entirely otherwise, rather than emitting a null.
+    |> maybe_put(:duration, Map.get(node, :duration))
     |> put_children(node, level, detail, max_depth)
   end
 

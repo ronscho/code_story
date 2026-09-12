@@ -17,6 +17,9 @@ defmodule CodeStory.Collector do
     stack: [],
     boundaries: [],
     saw_call: false,
+    # Microseconds from the most recent timestamped event, or nil when timing is
+    # off. Read by the call/return handlers, which are otherwise unaware of it.
+    now: nil,
     # One independent build per process. The caller's own entry lives here too,
     # so there is no special case for it.
     pids: %{},
@@ -76,6 +79,9 @@ defmodule CodeStory.Collector do
           args: named_args,
           return: nil,
           children: [],
+          # Start time, kept only while the node is on the stack; the return
+          # turns it into a duration and drops it.
+          started_at: state.now,
           # Identity that survives the node being copied from the stack into a
           # tree. A spawn records the ref of whatever was open at the time, and
           # the merge finds it again afterwards. Internal only -- `Encoder`
@@ -104,7 +110,19 @@ defmodule CodeStory.Collector do
         {:noreply, %{state | stack: rest}}
 
       [current | rest] ->
-        completed = %{current | return: return_value}
+        completed =
+          case {current.started_at, state.now} do
+            {nil, _} ->
+              Map.delete(%{current | return: return_value}, :started_at)
+
+            {_, nil} ->
+              Map.delete(%{current | return: return_value}, :started_at)
+
+            {t0, t1} ->
+              %{current | return: return_value}
+              |> Map.delete(:started_at)
+              |> Map.put(:duration, max(t1 - t0, 0))
+          end
 
         # Attach to the nearest REAL ancestor, skipping any sentinels
         # (`:skip_dunder` / `:skip_boundary` are atoms, not maps). The skipped
@@ -175,6 +193,25 @@ defmodule CodeStory.Collector do
   # Raw trace messages from :trace session (OTP 28+)
   # The Collector pid is set as the tracer, so messages arrive here directly
   @impl true
+  # `:timestamp` turns every trace message into its `_ts` variant with the time
+  # appended. Mapping them onto the plain clauses keeps one code path for the
+  # tree and confines timing to the two places that need it.
+  def handle_info({:trace_ts, pid, :call, mfa, ts}, state) do
+    handle_info({:trace, pid, :call, mfa}, %{state | now: us(ts)})
+  end
+
+  def handle_info({:trace_ts, pid, :return_from, mfa, value, ts}, state) do
+    handle_info({:trace, pid, :return_from, mfa, value}, %{state | now: us(ts)})
+  end
+
+  def handle_info({:trace_ts, parent, :spawn, child, mfa, _ts}, state) do
+    handle_info({:trace, parent, :spawn, child, mfa}, state)
+  end
+
+  def handle_info({:trace_ts, pid, :exit, reason, _ts}, state) do
+    handle_info({:trace, pid, :exit, reason}, state)
+  end
+
   def handle_info({:trace, pid, :call, {mod, fun, args}}, state) do
     state = anchor_unknown(pid, state)
 
@@ -227,9 +264,21 @@ defmodule CodeStory.Collector do
     {:stop, :normal, state}
   end
 
-  # Ignore other trace messages (e.g. :trace_ts variants)
+  # Everything else the `:procs` flag produces -- `:spawned`, `:link`,
+  # `:getting_unlinked` and friends -- is not part of a call tree.
+  #
+  # ⚠ Both shapes need both forms. With `timing: true` every message arrives as
+  # its `:trace_ts` variant with the time appended, so a 4-tuple becomes a
+  # 5-tuple and a 5-tuple a 6-tuple. Omitting the `_ts` catch-alls crashes the
+  # collector on the first spawn of a timed trace -- which each feature's own
+  # tests missed, because the timing tests spawned nothing and the spawn tests
+  # measured nothing.
   def handle_info({:trace, _pid, _type, _info}, state), do: {:noreply, state}
   def handle_info({:trace, _pid, _type, _info, _extra}, state), do: {:noreply, state}
+  def handle_info({:trace_ts, _pid, _type, _info, _ts}, state), do: {:noreply, state}
+
+  def handle_info({:trace_ts, _pid, _type, _info, _extra, _ts}, state),
+    do: {:noreply, state}
 
   @impl true
   def terminate(_reason, _state) do
@@ -279,7 +328,11 @@ defmodule CodeStory.Collector do
   # Anything still on the stack never returned -- a throw, a raise, a region
   # ended mid-call. Kept: a call that did not come back is usually the one worth
   # seeing.
-  defp flush({tree, stack}), do: tree ++ Enum.reverse(Enum.filter(stack, &is_map/1))
+  defp flush({tree, stack}) do
+    offen = stack |> Enum.filter(&is_map/1) |> Enum.map(&Map.delete(&1, :started_at))
+
+    tree ++ Enum.reverse(offen)
+  end
 
   defp fold_children(trees, spawns) when map_size(spawns) == 0, do: trees
 
@@ -357,6 +410,8 @@ defmodule CodeStory.Collector do
 
     {:noreply, %{next | pids: Map.put(next.pids, pid, {next.tree, next.stack})}}
   end
+
+  defp us({mega, sec, micro}), do: (mega * 1_000_000 + sec) * 1_000_000 + micro
 
   defp dunder?(fun) do
     name = Atom.to_string(fun)

@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `:timing` puts how long each call took on its node, as `duration` in
+  microseconds, and `to_encodable/2` passes it through. A call tree says what
+  happened and in what order; it could not say where the time went, and the
+  shape of a trace rarely predicts its cost — a node with one child can dominate
+  a node with fifty.
+
+  Off by default. The `:timestamp` trace flag makes the runtime stamp every
+  message, which is work per call, and it changes the node shape — a caller
+  pattern-matching the documented five keys should not have that happen behind
+  their back.
+
+  ⚠ A duration is **total**: the call and everything beneath it, including the
+  tracing overhead of everything beneath it. Useful for comparing siblings,
+  misleading as a benchmark.
+
+### Added
+
 - `:boundaries` accepts modules of your own, alongside the repos
   `:auto_boundary` detects: `boundaries: [MyApp.Accounts]`. The collector always
   handled an arbitrary list — suppress the interior, tag the entry — but
