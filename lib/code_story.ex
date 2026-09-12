@@ -222,7 +222,7 @@ defmodule CodeStory do
 
         try do
           result = fun.()
-          {result, collect(collector_pid)}
+          {result, drain_and_finish(collector_pid)}
         after
           CodeStory.Tracer.stop_tracing()
           Process.delete(@collector_key)
@@ -235,6 +235,68 @@ defmodule CodeStory do
 
       {:error, reason} ->
         raise "CodeStory.narrate: could not start tracing (#{inspect(reason)})"
+    end
+  end
+
+  @doc """
+  Starts a trace on the calling process without printing anything.
+
+  The manual counterpart to `narrate/2`: `record/1` arms, `collect/0` hands back
+  the tree. Use it where there is no block to wrap -- a `Plug` that has to start
+  at the beginning of a pipeline and finish in `register_before_send/2`, a
+  GenServer that arms in one callback and reads back in another, a LiveView
+  that mounts and later disconnects.
+
+      def call(conn, _) do
+        CodeStory.record(extra_namespaces: ["MyMailer"])
+
+        Plug.Conn.register_before_send(conn, fn conn ->
+          File.write!(path, CodeStory.collect() |> CodeStory.to_encodable() |> JSON.encode!())
+          conn
+        end)
+      end
+
+  `tell/1` and `stop/0` are the same shape for the printing path; this pair
+  never writes to the terminal.
+
+  ⚠ Answers `{:error, :already_tracing}` when a trace is already active on this
+  process rather than silently joining it -- two overlapping recordings on one
+  process would each get an arbitrary part of the calls.
+  """
+  @spec record(keyword()) :: :ok | {:error, term()}
+  def record(opts \\ []) do
+    if Process.get(@collector_key) do
+      IO.warn("CodeStory: a trace is already active on this process")
+      {:error, :already_tracing}
+    else
+      do_start(Keyword.merge([auto_boundary: true], opts))
+    end
+  end
+
+  @doc """
+  Stops the trace started by `record/1` and answers its tree.
+
+  The same data as `narrate/2`'s second element: a list of
+  `%{module, function, args, return, children}` node maps, with no display
+  transforms applied. Pair it with `to_encodable/2` for JSON.
+
+  ⓘ Warns and answers `[]` when no trace is active, so a stray `collect/0` is
+  harmless -- the symmetric case to `stop/0`.
+  """
+  @spec collect() :: [map()]
+  def collect do
+    case Process.get(@collector_key) do
+      nil ->
+        IO.warn("CodeStory: no active trace")
+        []
+
+      collector_pid ->
+        tree = drain_and_finish(collector_pid)
+        Process.delete(@collector_key)
+
+        if Process.alive?(collector_pid), do: GenServer.stop(collector_pid)
+
+        tree
     end
   end
 
@@ -303,7 +365,7 @@ defmodule CodeStory do
             # collector, output_result can raise (File.write! / formatter). Neither
             # may clobber a successful fun, so both are guarded (rescue AND catch).
             try do
-              collector_pid |> collect() |> output_result(opts)
+              collector_pid |> drain_and_finish() |> output_result(opts)
             rescue
               e ->
                 IO.warn(
@@ -493,7 +555,7 @@ defmodule CodeStory do
   # withheld.
   @drain_ceiling_ms 200
 
-  defp collect(pid) do
+  defp drain_and_finish(pid) do
     drain(pid, 0)
     CodeStory.Tracer.stop_tracing()
 
