@@ -139,6 +139,16 @@ CodeStory.tell(show_args: false, output: :both)
   > to the log in plaintext. Treat the file as sensitive and delete it when
   > you're done reading it.
 
+- **`extra_namespaces`** — further top-level namespaces to trace, for app code
+  that does not live under the app-name prefix:
+  `extra_namespaces: ["EmailService", "StripeApi"]`. Detection reads your
+  `mix.exs` and arms `MyApp.*` and `MyAppWeb.*`; a mailer under `EmailService`,
+  a vendor client under its own name, a `Core` extracted but not yet its own app
+  are all your code and none of them match. The symptom of a missing namespace
+  is silent — those calls are simply absent from the trace, which reads like the
+  code never ran. Additive: your app's own namespaces are always armed.
+  Default: `[]`.
+
 - **`auto_boundary`** — treat Ecto repos as _boundary modules_: a repo call
   (e.g. `Repo.get!`) shows as a single node with its arguments and return, but the
   repo's internal Ecto plumbing is hidden. Default: `true`. Set to `false` to
@@ -171,7 +181,7 @@ CodeStory.tell(show_args: false, output: :both)
 
 ## How It Works
 
-1. **Module detection** — reads your `mix.exs` app name and finds all your project's modules
+1. **Module detection** — reads your `mix.exs` app name and finds all your project's modules, plus any namespaces you name in `extra_namespaces`
 2. **Argument name extraction** — reads Elixir debug info from BEAM files to recover original parameter names, scanning across all function clauses to find the best names
 3. **Erlang tracing** — sets up trace sessions on the calling process for your modules
 4. **Tree building** — a collector process receives trace events and builds a nested call tree

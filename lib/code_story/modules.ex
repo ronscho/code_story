@@ -1,6 +1,10 @@
 defmodule CodeStory.Modules do
   @moduledoc """
   Auto-detects user-defined modules from the host project's mix.exs app name.
+
+  The app name is a good default and not a complete answer: code that belongs to
+  the app but sits under a different top-level namespace is invisible to it.
+  `detect/1` takes those namespaces as an argument.
   """
 
   @doc """
@@ -24,22 +28,37 @@ defmodule CodeStory.Modules do
   app name from `Mix.Project.config()[:app]`, including the app's
   Web namespace (e.g. `:my_app` matches `MyApp.*` and `MyAppWeb.*`,
   the conventional Phoenix split).
+
+  `extra` names further top-level namespaces to include, for the code in your
+  app that does not live under the app-name prefix. That is common enough to be
+  worth an option: a mailer under `EmailService`, an API client under
+  `StripeApi`, a shared `Core` extracted but not yet its own app. Those modules
+  are as much "your code" as `MyApp.*` is, and the prefix rule cannot see them.
+
+      CodeStory.Modules.detect(["EmailService", "StripeApi"])
+
+  ⚠ The symptom when a namespace is missing is not an error — it is a trace in
+  which those calls are simply **absent**, which reads like the code never ran.
+  Accepts strings or module aliases (`EmailService` and `"EmailService"` are the
+  same namespace).
   """
-  @spec detect() :: [module()]
-  def detect do
+  @spec detect([String.t() | module()]) :: [module()]
+  def detect(extra \\ []) do
     app = Mix.Project.config()[:app]
     prefix = camelize_app_name(app)
-    web_prefix = prefix <> "Web"
+    namespaces = MapSet.new([prefix, prefix <> "Web" | Enum.map(extra, &namespace/1)])
 
     :code.all_available()
     |> Enum.map(fn {mod_charlist, _path, _loaded} -> List.to_atom(mod_charlist) end)
     |> Enum.filter(&elixir_module?/1)
-    |> Enum.filter(fn mod ->
-      top = hd(Module.split(mod))
-      top == prefix or top == web_prefix
-    end)
+    |> Enum.filter(fn mod -> MapSet.member?(namespaces, hd(Module.split(mod))) end)
     |> Enum.reject(&code_story_module?/1)
   end
+
+  # An alias arrives as the atom :"Elixir.EmailService"; a string arrives as
+  # written. `Module.split/1` compares against the written head either way.
+  defp namespace(name) when is_binary(name), do: name
+  defp namespace(name) when is_atom(name), do: hd(Module.split(name))
 
   @doc """
   Filters the given modules to those that are Ecto repos.

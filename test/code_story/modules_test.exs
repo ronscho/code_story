@@ -9,6 +9,38 @@ defmodule CodeStory.ModulesTest do
     end
   end
 
+  describe "detect/1 with extra namespaces" do
+    test "includes a namespace named as a string" do
+      true = Code.ensure_loaded?(OutsideNamespace.Mailer)
+      assert OutsideNamespace.Mailer in CodeStory.Modules.detect(["OutsideNamespace"])
+    end
+
+    test "includes a namespace named as an alias" do
+      # `OutsideNamespace` is the atom :"Elixir.OutsideNamespace" here, not a
+      # string -- both are the same namespace to a reader, so both must work.
+      true = Code.ensure_loaded?(OutsideNamespace.Mailer)
+      assert OutsideNamespace.Mailer in CodeStory.Modules.detect([OutsideNamespace])
+    end
+
+    test "keeps the app's own namespaces" do
+      _ = CodeStory.TestSupport.SampleModule.add(1, 2)
+      true = Code.ensure_loaded?(CodeStoryWeb.SampleWebModule)
+
+      modules = CodeStory.Modules.detect(["OutsideNamespace"])
+
+      assert CodeStory.TestSupport.SampleModule in modules
+      assert CodeStoryWeb.SampleWebModule in modules
+    end
+
+    test "still excludes CodeStory's core modules" do
+      refute CodeStory.Tracer in CodeStory.Modules.detect(["OutsideNamespace"])
+    end
+
+    test "an unknown namespace adds nothing and raises nothing" do
+      assert CodeStory.Modules.detect(["NoSuchNamespace"]) == CodeStory.Modules.detect()
+    end
+  end
+
   describe "ecto_repos/1" do
     alias CodeStory.TestSupport.{FakeRepo, NotARepo}
 
@@ -57,6 +89,13 @@ defmodule CodeStory.ModulesTest do
       true = Code.ensure_loaded?(CodeStoryWeb.SampleWebModule)
       modules = CodeStory.Modules.detect()
       assert CodeStoryWeb.SampleWebModule in modules
+    end
+
+    test "does not include a namespace outside the app prefix" do
+      # The behaviour `detect/1` exists to change: without being told, detection
+      # cannot know this module is app code.
+      true = Code.ensure_loaded?(OutsideNamespace.Mailer)
+      refute OutsideNamespace.Mailer in CodeStory.Modules.detect()
     end
 
     test "excludes standard library modules" do

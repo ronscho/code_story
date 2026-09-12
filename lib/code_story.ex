@@ -46,6 +46,15 @@ defmodule CodeStory do
       reported and the trace runs without it. ⚠ Following attaches to a
       *process*, not to a conversation: everything that process does during the
       window is recorded, including work other callers asked it for.
+    * `:extra_namespaces` - further top-level namespaces to trace, for app code
+      that does not live under the app-name prefix:
+      `extra_namespaces: ["EmailService", "StripeApi"]`. Detection reads
+      `mix.exs` and arms `MyApp.*` and `MyAppWeb.*`; a mailer under
+      `EmailService`, an API client under its vendor's name, a `Core` extracted
+      but not yet its own app are all your code and none of them match. ⚠ The
+      symptom is silent: those calls are **missing** from the trace, which reads
+      like the code never ran. Additive — the app's own namespaces are always
+      armed.
     * `:timing` - when `true`, every node carries `duration` in microseconds.
       Off by default: the `:timestamp` trace flag makes the runtime stamp every
       message, which is work per call, and a trace read for structure should not
@@ -190,9 +199,10 @@ defmodule CodeStory do
       `{result, []}`. Processes `fun` spawns are followed; ones that were already
       running are followed when named in `:follow`.
     * `opts` are trace-time only — `:auto_boundary` (default `true`, as in
-      `tell/1`) and `:follow`. Pass `auto_boundary: false` to include an Ecto
-      repo's internals in the raw tree; pass `follow:` to trace processes that
-      were already running.
+      `tell/1`), `:follow` and `:extra_namespaces`. Pass `auto_boundary: false`
+      to include an Ecto repo's internals in the raw tree; pass `follow:` to
+      trace processes that were already running; pass `extra_namespaces:` to
+      trace app code living outside the app-name prefix.
     * **Raises** `ArgumentError` if a trace is already active on this process
       (unlike `tell/1`, which returns `{:error, :already_tracing}` — a tagged tuple
       would be ambiguous with a legitimate `{:error, tree}` result).
@@ -378,7 +388,10 @@ defmodule CodeStory do
   end
 
   defp do_start(opts) do
-    modules = CodeStory.Modules.detect()
+    # Namespaces beyond the app-name prefix, for app code that does not live
+    # under it. Nothing is subtracted -- `MyApp.*` and `MyAppWeb.*` are always
+    # in.
+    modules = CodeStory.Modules.detect(Keyword.get(opts, :extra_namespaces, []))
     args_map = CodeStory.Args.extract(modules)
 
     # `tell/1` merges the `auto_boundary: true` default, so the value is always
