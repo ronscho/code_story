@@ -64,6 +64,15 @@ defmodule CodeStory.Collector do
       dunder?(fun) ->
         {:noreply, %{state | stack: [:skip_dunder | state.stack]}}
 
+      # Compiler-generated: an anonymous function becomes its own
+      # `-caller/arity-fun-0-` entry. Nobody wrote it, so it has no place in a
+      # story about the code. It used to be excluded by never arming it; a
+      # module armed with a wildcard cannot skip anything, so the exclusion
+      # happens here instead. A sentinel rather than a plain skip, because the
+      # entry does return and its `return_from` has to find something to pop.
+      generated?(fun) ->
+        {:noreply, %{state | stack: [:skip_generated | state.stack]}}
+
       # Boundary module: suppress its OWN interior calls (a call to a boundary
       # module while that same boundary module is already an ancestor). The
       # entry call — no boundary ancestor yet — falls through and is shown.
@@ -103,8 +112,8 @@ defmodule CodeStory.Collector do
       [] ->
         {:noreply, state}
 
-      # Both sentinels (`:skip_dunder`, `:skip_boundary`) are discarded the same
-      # way. The `is_atom` guard keeps the following `[current | rest]` clause
+      # All sentinels (`:skip_dunder`, `:skip_generated`, `:skip_boundary`) are
+      # discarded the same way. The `is_atom` guard keeps the following `[current | rest]` clause
       # provably map-only, so it can't bind a sentinel and crash on `%{current | ...}`.
       [sentinel | rest] when is_atom(sentinel) ->
         {:noreply, %{state | stack: rest}}
@@ -190,7 +199,7 @@ defmodule CodeStory.Collector do
     {:reply, reply, state}
   end
 
-  # Raw trace messages from :trace session (OTP 28+)
+  # Raw trace messages from a :trace session (the module is OTP 27.0+)
   # The Collector pid is set as the tracer, so messages arrive here directly
   @impl true
   # `:timestamp` turns every trace message into its `_ts` variant with the time
@@ -417,6 +426,8 @@ defmodule CodeStory.Collector do
     name = Atom.to_string(fun)
     String.starts_with?(name, "__") and String.ends_with?(name, "__")
   end
+
+  defp generated?(fun), do: fun |> Atom.to_string() |> String.starts_with?("-")
 
   # True if a real node for `mod` is already on the stack (an ancestor of the
   # call being considered). Runs before the new node is pushed, so it scans

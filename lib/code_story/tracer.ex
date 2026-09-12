@@ -2,7 +2,7 @@ defmodule CodeStory.Tracer do
   @moduledoc """
   Configures Erlang tracing to feed events into the Collector.
 
-  Uses OTP 28's `:trace` module with session-based tracing.
+  Uses the `:trace` module with session-based tracing, introduced in OTP 27.0.
   The Collector pid is set as the tracer — trace messages arrive
   directly as `handle_info` callbacks.
   """
@@ -47,21 +47,17 @@ defmodule CodeStory.Tracer do
 
       match_spec = [{:_, [], [{:return_trace}]}]
 
+      # One pattern per module, not one per function. `{Module, :_, :_}` covers
+      # every function including private ones, which is what `module_info` was
+      # being read for.
+      #
+      # ⚠ It also covers the compiler-generated `-caller/arity-fun-0-` entries
+      # that the per-function loop skipped, because a wildcard cannot skip
+      # anything. They are filtered where the events arrive instead; the
+      # observable trace is unchanged, and `generated_functions_test.exs` holds
+      # that down.
       Enum.each(modules, fn module ->
-        # OTP 28's :trace.function doesn't support wildcards for function/arity
-        # Enumerate all functions and set trace patterns explicitly.
-        # module_info(:functions) includes private (defp) functions, unlike
-        # __info__(:functions) which lists only public ones. Compiler-generated
-        # entries (anonymous funs, "-name/arity-fun-0-") are excluded.
-        functions =
-          module.module_info(:functions)
-          |> Enum.reject(fn {fun, _arity} ->
-            fun |> Atom.to_string() |> String.starts_with?("-")
-          end)
-
-        Enum.each(functions, fn {fun, arity} ->
-          :trace.function(session, {module, fun, arity}, match_spec, [:local])
-        end)
+        :trace.function(session, {module, :_, :_}, match_spec, [:local])
       end)
 
       # Store session for cleanup

@@ -69,6 +69,14 @@ defmodule CodeStory.TestSupport.SampleApp do
     |> Enum.map(&Task.await/1)
   end
 
+  # Uses an anonymous function, which the compiler turns into a separate
+  # `-with_anonymous_fun/1-fun-0-` entry in `module_info(:functions)`. Arming a
+  # module with a wildcard catches those too, so the filter has to move to where
+  # the events arrive.
+  def with_anonymous_fun(list) do
+    Enum.map(list, fn x -> x * 2 end)
+  end
+
   # Sleeps, so a measured duration has something to measure.
   def slow(ms) do
     :timer.sleep(ms)

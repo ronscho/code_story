@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Modules are armed with one wildcard pattern each (`{Module, :_, :_}`) instead
+  of one pattern per function. Measured on a 286-module application: arming
+  dropped from **707 ms to 46 ms**, and a whole `narrate/2` from **737 ms to
+  195 ms**.
+
+  ⚠ The comment this replaces said OTP 28's `:trace.function` does not support
+  wildcards for function/arity. Both halves are wrong: the `trace` module is
+  OTP **27.0**, and `{Module,'_','_'}` is in its documentation verbatim. It
+  works with a match spec too — measured before changing anything.
+
+  A wildcard cannot skip the compiler-generated `-caller/arity-fun-0-` entries
+  that the per-function loop rejected, so they are filtered where the events
+  arrive instead. The observable trace is unchanged, which a characterisation
+  test holds down.
+
+  ⓘ What is left is `Modules.detect/0` (85 ms) and `Args.extract/1` (56 ms).
+  Neither changes during a run, so both look cacheable — a separate question.
+
 ### Added
 
 - `:timing` puts how long each call took on its node, as `duration` in
