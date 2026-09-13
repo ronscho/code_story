@@ -55,9 +55,23 @@ defmodule CodeStory do
       symptom is silent: those calls are **missing** from the trace, which reads
       like the code never ran. Additive — the app's own namespaces are always
       armed.
-    * `:values` - when `false`, arguments are **not recorded**, and the trace
-      costs almost nothing. The names still come from the debug info, so the
-      tree still says what was passed; each value reads `…`.
+    * `:values` - which calls record their arguments. `true` (default) is all of
+      them, `false` is none, and **a list of modules** is the form worth reaching
+      for on a real request: those keep their values, everyone else keeps only
+      the names. Argument names always survive, so the tree still says what was
+      passed; a value that was not recorded reads `…`.
+
+          # the calls worth reading keep their arguments; the framework does not
+          CodeStory.narrate(fun, values: [MyApp.Accounts, MyApp.Orders])
+
+      ⓘ Why a choice and not a switch: the expensive arguments are rarely the
+      interesting ones. A framework struct threaded through every layer carries
+      the sharing that makes copying explode, while the call worth reading takes
+      an id and a name.
+      ⓘ A list costs a second trace session. Flags are set per **process**, not
+      per function, so cheap and full arming cannot coexist in one session;
+      sessions (OTP 27) carry their own flags for the same process, and a
+      function obeys the one it was armed in.
       ⚠⚠ This is not a filter applied afterwards. It arms with the runtime's
       `:arity` flag, so a call event carries `{M, F, 1}` instead of
       `{M, F, [args]}` and the arguments are **never copied onto the tracer's

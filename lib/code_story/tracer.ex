@@ -22,75 +22,87 @@ defmodule CodeStory.Tracer do
         values \\ true
       ) do
     try do
-      # Use a unique session name to avoid conflicts
-      session_name = :"code_story_trace_#{:erlang.unique_integer([:positive])}"
-      session = :trace.session_create(session_name, collector_pid, [])
-
-      # `:set_on_spawn` hands the flags to every process the traced one starts,
-      # so following the recursion needs no code of ours -- the runtime does it.
-      # `:procs` adds the spawn and exit events: spawn says where a child's tree
-      # belongs, exit says when it can no longer grow.
-      # `:timestamp` makes the runtime stamp every trace message. That is work
-      # per call, so it is only asked for when durations are wanted.
-      # ⚠⚠ `:arity` is the whole of `values: false`, and it is not a filter -- it
-      # changes what the runtime puts in the message. With it a call reads
-      # `{M, F, 1}` instead of `{M, F, [args]}`, so the arguments are **never
-      # copied onto the tracer's heap**. Measured on one call with a
-      # 50_000-element argument: 249_393 bytes against 148.
+      # ⚠⚠ Two sessions, not one, and that is the whole feature. Trace flags are
+      # set per PROCESS, not per function -- so arming some modules cheaply and
+      # others fully is impossible within one session. Sessions (OTP 27) exist
+      # for exactly this: each carries its own flags for the same process, and a
+      # function obeys the session it was armed in. Verified before relying on
+      # it: one process, one collector, two sessions, and the same call comes
+      # back as `{M, F, 1}` from one and `{M, F, [5, "speed"]}` from the other.
       #
-      # That matters because copying loses sharing: rows that all reference the
-      # same struct are expanded on every copy, so the cost follows the data
-      # flowing through the program rather than the number of calls.
-      #
-      # ⚠ Return values are still copied. `{:return_trace}` is what tells the
-      # collector a call came back, the tree cannot be built without it, and the
-      # runtime offers no variant that omits the value. So this halves the
-      # traffic on a value-heavy path, it does not remove it.
-      flags =
-        [:call, :set_on_spawn, :procs] ++
-          if(timing, do: [:timestamp], else: []) ++
-          if(values, do: [], else: [:arity])
+      # ⓘ Which is what makes `values:` a *choice* rather than a switch. The
+      # expensive arguments are rarely the interesting ones -- a framework
+      # struct threaded through every layer carries the sharing that makes
+      # copying explode, while the call worth reading takes an id and a name.
+      {mit_werten, ohne_werte} = teile(modules, values)
 
-      :trace.process(session, traced_pid, true, flags)
-
-      # Processes that were already running when the trace started. They have no
-      # spawn to inherit flags from, so each is attached by hand.
-      #
-      # ⚠ `:trace.process/4` rejects a registered name -- "invalid process spec",
-      # unlike the legacy `:erlang.trace/3`. Resolving it here also lets a name
-      # nobody registered be reported instead of quietly doing nothing.
-      Enum.each(follow, fn target ->
-        case resolve(target) do
-          nil ->
-            IO.warn("CodeStory: follow: no process registered as #{inspect(target)}")
-
-          pid ->
-            :trace.process(session, pid, true, flags)
-        end
-      end)
-
+      flags = [:call, :set_on_spawn, :procs] ++ if timing, do: [:timestamp], else: []
       match_spec = [{:_, [], [{:return_trace}]}]
 
-      # One pattern per module, not one per function. `{Module, :_, :_}` covers
-      # every function including private ones, which is what `module_info` was
-      # being read for.
-      #
-      # ⚠ It also covers the compiler-generated `-caller/arity-fun-0-` entries
-      # that the per-function loop skipped, because a wildcard cannot skip
-      # anything. They are filtered where the events arrive instead; the
-      # observable trace is unchanged, and `generated_functions_test.exs` holds
-      # that down.
-      Enum.each(modules, fn module ->
-        :trace.function(session, {module, :_, :_}, match_spec, [:local])
-      end)
+      sessions =
+        [{mit_werten, flags}, {ohne_werte, flags ++ [:arity]}]
+        |> Enum.reject(fn {module, _} -> module == [] end)
+        |> Enum.map(fn {module, session_flags} ->
+          session =
+            :trace.session_create(
+              :"code_story_trace_#{:erlang.unique_integer([:positive])}",
+              collector_pid,
+              []
+            )
 
-      # Store session for cleanup
-      Process.put(:code_story_trace_session, session)
+          :trace.process(session, traced_pid, true, session_flags)
+
+          # Processes that were already running when the trace started. They
+          # have no spawn to inherit flags from, so each is attached by hand.
+          #
+          # ⚠ `:trace.process/4` rejects a registered name -- "invalid process
+          # spec", unlike the legacy `:erlang.trace/3`. Resolving it here also
+          # lets a name nobody registered be reported instead of quietly doing
+          # nothing.
+          Enum.each(follow, fn target ->
+            case resolve(target) do
+              nil ->
+                IO.warn("CodeStory: follow: no process registered as #{inspect(target)}")
+
+              pid ->
+                :trace.process(session, pid, true, session_flags)
+            end
+          end)
+
+          # One pattern per module, not one per function. `{Module, :_, :_}`
+          # covers every function including private ones, which is what
+          # `module_info` was being read for.
+          #
+          # ⚠ It also covers the compiler-generated `-caller/arity-fun-0-`
+          # entries that the per-function loop skipped, because a wildcard
+          # cannot skip anything. They are filtered where the events arrive
+          # instead; the observable trace is unchanged, and
+          # `generated_functions_test.exs` holds that down.
+          Enum.each(module, fn m ->
+            :trace.function(session, {m, :_, :_}, match_spec, [:local])
+          end)
+
+          session
+        end)
+
+      # Store sessions for cleanup
+      Process.put(:code_story_trace_session, sessions)
       :ok
     rescue
       e in ArgumentError ->
         {:error, "Failed to start tracing: #{Exception.message(e)}"}
     end
+  end
+
+  # `values: true` -- everything as before. `false` -- nothing, the whole trace
+  # armed with `:arity`. A **list** -- these modules carry their values and the
+  # rest do not, which is the form worth reaching for on a real request.
+  defp teile(modules, true), do: {modules, []}
+  defp teile(modules, false), do: {[], modules}
+
+  defp teile(modules, gewaehlt) when is_list(gewaehlt) do
+    gewaehlt = MapSet.new(gewaehlt)
+    Enum.split_with(modules, &MapSet.member?(gewaehlt, &1))
   end
 
   # A zero-arity function, for a process that carries no name at all: compute
@@ -123,12 +135,14 @@ defmodule CodeStory.Tracer do
       nil ->
         :ok
 
-      session ->
-        try do
-          :trace.session_destroy(session)
-        rescue
-          ArgumentError -> :ok
-        end
+      sessions ->
+        Enum.each(List.wrap(sessions), fn session ->
+          try do
+            :trace.session_destroy(session)
+          rescue
+            ArgumentError -> :ok
+          end
+        end)
 
         Process.delete(:code_story_trace_session)
         :ok

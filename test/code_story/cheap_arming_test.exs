@@ -85,6 +85,49 @@ defmodule CodeStory.CheapArmingTest do
       assert ohne < 100, "ohne Werte darf nichts davon uebrig sein, war #{ohne} Bytes"
     end
 
+    # ⚠⚠ The form worth reaching for on a real request: values where they are
+    # worth reading, arity everywhere else. Trace flags are per process, so this
+    # needs two trace sessions -- one function obeys the session it was armed
+    # in, and both report to the same collector.
+    test "a list of modules keeps their values and drops everyone else's" do
+      gross = Enum.to_list(1..50_000)
+
+      {_, tree} =
+        CodeStory.narrate(
+          fn ->
+            SampleApp.process_data(gross)
+            SampleApp.add(3, 2)
+          end,
+          values: [SampleApp]
+        )
+
+      nach_funktion = Map.new(all_nodes(tree), fn n -> {n.function, n.args} end)
+
+      # SampleApp war gewaehlt -- seine Werte sind da.
+      assert nach_funktion[:add] == [{:num1, 3}, {:num2, 2}]
+      assert [{:data, ^gross}] = nach_funktion[:process_data]
+    end
+
+    test "an unchosen module keeps its names and loses its values" do
+      {_, tree} =
+        CodeStory.narrate(
+          fn ->
+            SampleApp.add(3, 2)
+            CodeStory.TestSupport.SampleModule.add(1, 2)
+          end,
+          values: [CodeStory.TestSupport.SampleModule]
+        )
+
+      nach_modul = Map.new(all_nodes(tree), fn n -> {n.module, n.args} end)
+
+      assert nach_modul[CodeStory.TestSupport.SampleModule] == [{:num1, 1}, {:num2, 2}]
+
+      # ⚠ Die Namen bleiben, nur die Werte gehen -- der Baum sagt weiter, WAS
+      # uebergeben wurde.
+      leer = Collector.no_value()
+      assert nach_modul[SampleApp] == [{:num1, leer}, {:num2, leer}]
+    end
+
     test "record/collect takes the option too" do
       CodeStory.record(values: false)
       SampleApp.add(1, 2)
