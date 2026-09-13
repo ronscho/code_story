@@ -52,6 +52,15 @@ defmodule CodeStory.Collector do
      }}
   end
 
+  # ⚠ Stands where a value would be when `values: false` kept the runtime from
+  # copying one. Public, because `CleanInspect` has to recognise it and a caller
+  # reading the raw tree deserves something better than a mystery atom.
+  @no_value :code_story_no_value
+
+  @doc "The placeholder a trace taken with `values: false` puts in place of every argument."
+  @spec no_value() :: atom()
+  def no_value, do: @no_value
+
   @impl true
   def handle_cast({:trace_event, {:call, {mod, fun, args}}}, state) do
     # Sticky: a call event has now been observed. Lets `narrate` distinguish a
@@ -296,16 +305,26 @@ defmodule CodeStory.Collector do
 
   ## Private
 
+  # ⚠ Two shapes arrive here. Normally `args` is the argument list. Under
+  # `values: false` the runtime sends the **arity** instead -- an integer --
+  # because the `:arity` flag keeps it from copying the arguments at all. The
+  # names still come from the debug info, so the trace keeps saying *what* was
+  # passed; only the values are gone.
+  defp enrich_args(mod, fun, arity, args_map) when is_integer(arity) do
+    mod |> arg_names(fun, arity, args_map) |> Enum.map(&{&1, @no_value})
+  end
+
   defp enrich_args(mod, fun, args, args_map) do
-    arity = length(args)
+    mod
+    |> arg_names(fun, length(args), args_map)
+    |> Enum.zip(args)
+  end
 
-    names =
-      case Map.fetch(args_map, {mod, fun, arity}) do
-        {:ok, names} -> names
-        :error -> Enum.map(1..max(arity, 1)//1, &:"arg#{&1}") |> Enum.take(arity)
-      end
-
-    Enum.zip(names, args)
+  defp arg_names(mod, fun, arity, args_map) do
+    case Map.fetch(args_map, {mod, fun, arity}) do
+      {:ok, names} -> names
+      :error -> Enum.map(1..max(arity, 1)//1, &:"arg#{&1}") |> Enum.take(arity)
+    end
   end
 
   # Folds the per-process trees back into one, children first.

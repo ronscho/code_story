@@ -13,7 +13,14 @@ defmodule CodeStory.Tracer do
   The `collector_pid` receives trace messages directly.
   Returns `:ok` or `{:error, reason}`.
   """
-  def start_tracing(collector_pid, modules, traced_pid, follow \\ [], timing \\ false) do
+  def start_tracing(
+        collector_pid,
+        modules,
+        traced_pid,
+        follow \\ [],
+        timing \\ false,
+        values \\ true
+      ) do
     try do
       # Use a unique session name to avoid conflicts
       session_name = :"code_story_trace_#{:erlang.unique_integer([:positive])}"
@@ -25,7 +32,24 @@ defmodule CodeStory.Tracer do
       # belongs, exit says when it can no longer grow.
       # `:timestamp` makes the runtime stamp every trace message. That is work
       # per call, so it is only asked for when durations are wanted.
-      flags = [:call, :set_on_spawn, :procs] ++ if timing, do: [:timestamp], else: []
+      # ⚠⚠ `:arity` is the whole of `values: false`, and it is not a filter -- it
+      # changes what the runtime puts in the message. With it a call reads
+      # `{M, F, 1}` instead of `{M, F, [args]}`, so the arguments are **never
+      # copied onto the tracer's heap**. Measured on one call with a
+      # 50_000-element argument: 249_393 bytes against 148.
+      #
+      # That matters because copying loses sharing: rows that all reference the
+      # same struct are expanded on every copy, so the cost follows the data
+      # flowing through the program rather than the number of calls.
+      #
+      # ⚠ Return values are still copied. `{:return_trace}` is what tells the
+      # collector a call came back, the tree cannot be built without it, and the
+      # runtime offers no variant that omits the value. So this halves the
+      # traffic on a value-heavy path, it does not remove it.
+      flags =
+        [:call, :set_on_spawn, :procs] ++
+          if(timing, do: [:timestamp], else: []) ++
+          if(values, do: [], else: [:arity])
 
       :trace.process(session, traced_pid, true, flags)
 

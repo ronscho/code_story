@@ -52,6 +52,12 @@ defmodule CodeStory.CleanInspect do
   Like `Kernel.inspect/2`, but with Ecto `__meta__`/`NotLoaded` noise stripped.
   """
   @spec inspect(term(), keyword()) :: String.t()
+  # The placeholder a `values: false` trace leaves behind. Rendering it as the
+  # atom it is would put `:code_story_no_value` on every argument of every line;
+  # an ellipsis says the same thing and reads as what it is -- something the
+  # trace deliberately did not carry.
+  def inspect(:code_story_no_value, _opts), do: "…"
+
   def inspect(value, opts) do
     # A top-level Ecto.Query value is labelled compactly (schema summary) at the
     # summary detail levels only. `:novel` is the ONLY level whose opts carry

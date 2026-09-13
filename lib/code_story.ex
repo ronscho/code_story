@@ -55,6 +55,23 @@ defmodule CodeStory do
       symptom is silent: those calls are **missing** from the trace, which reads
       like the code never ran. Additive — the app's own namespaces are always
       armed.
+    * `:values` - when `false`, arguments are **not recorded**, and the trace
+      costs almost nothing. The names still come from the debug info, so the
+      tree still says what was passed; each value reads `…`.
+      ⚠⚠ This is not a filter applied afterwards. It arms with the runtime's
+      `:arity` flag, so a call event carries `{M, F, 1}` instead of
+      `{M, F, [args]}` and the arguments are **never copied onto the tracer's
+      heap**. Measured on a single call with a 50_000-element argument:
+      249_393 bytes against **148**.
+      ⓘ Why that is worth an option rather than a smaller default: term copying
+      **loses sharing**, so a hundred rows referencing one struct are expanded a
+      hundred times. The cost of a trace then follows the size of the data
+      flowing through the program, not the number of calls -- which is how a
+      trace can stop returning on a page that answers in 140 ms untraced.
+      ⚠ Return values are still copied: `{:return_trace}` is what tells the
+      collector a call came back, the tree cannot be built without it, and the
+      runtime has no variant that omits the value. On a value-heavy path this
+      halves the traffic rather than removing it.
     * `:timing` - when `true`, every node carries `duration` in microseconds.
       Off by default: the `:timestamp` trace flag makes the runtime stamp every
       message, which is work per call, and a trace read for structure should not
@@ -199,7 +216,7 @@ defmodule CodeStory do
       `{result, []}`. Processes `fun` spawns are followed; ones that were already
       running are followed when named in `:follow`.
     * `opts` are trace-time only — `:auto_boundary` (default `true`, as in
-      `tell/1`), `:follow` and `:extra_namespaces`. Pass `auto_boundary: false`
+      `tell/1`), `:follow`, `:extra_namespaces` and `:values`. Pass `auto_boundary: false`
       to include an Ecto repo's internals in the raw tree; pass `follow:` to
       trace processes that were already running; pass `extra_namespaces:` to
       trace app code living outside the app-name prefix.
@@ -479,7 +496,16 @@ defmodule CodeStory do
 
     timing = Keyword.get(opts, :timing, false)
 
-    case CodeStory.Tracer.start_tracing(collector_pid, modules, self(), follow, timing) do
+    values = Keyword.get(opts, :values, true)
+
+    case CodeStory.Tracer.start_tracing(
+           collector_pid,
+           modules,
+           self(),
+           follow,
+           timing,
+           values
+         ) do
       :ok ->
         Process.put(@collector_key, collector_pid)
         :ok
